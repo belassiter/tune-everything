@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-Time Audio Spectrogram</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- The pitchdetect.js library is now inlined below -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            touch-action: none;
+        }
+        canvas {
+            background-color: #000;
+            border-radius: 0.5rem;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+        }
+        #recordButton:disabled, #downloadButton:disabled, #scrollButton:disabled {
+            cursor: not-allowed;
+            opacity: 0.7;
+        }
+        input[type="range"] {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 100%;
+            height: 8px;
+            background: #4a5568;
+            border-radius: 5px;
+            outline: none;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            background: #4299e1;
+            cursor: pointer;
+            border-radius: 50%;
+        }
+        input[type="range"]::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            background: #4299e1;
+            cursor: pointer;
+            border-radius: 50%;
+        }
+        .radio-label input:checked + .radio-custom {
+            background-color: #4299e1;
+            border-color: #4299e1;
+        }
+        .radio-label input:disabled + .radio-custom {
+            background-color: #2d3748;
+            border-color: #4a5568;
+            cursor: not-allowed;
+        }
+        .radio-label input:disabled ~ .radio-text {
+            color: #718096;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white flex flex-col items-center justify-center min-h-screen p-4">
+
+    <div class="w-full max-w-4xl text-center">
+        <h1 class="text-3xl md:text-4xl font-bold mb-2">Real-Time Audio Spectrogram</h1>
+        <p id="statusText" class="text-gray-400 mb-6">Press 'Start Listening' to begin.</p>
+
+        <div class="w-full aspect-video mb-6">
+             <canvas id="spectrogramCanvas"></canvas>
+        </div>
+        <div class="w-full aspect-video mb-6">
+             <canvas id="spectrogramCanvas2"></canvas>
+        </div>
+        
+        <div id="controlsContainer" class="w-full max-w-4xl mx-auto mb-6 space-y-4">
+            <div class="text-center mb-4">
+                <span class="text-lg font-semibold text-gray-300">Analysis Method</span>
+                <div class="flex justify-center items-center space-x-4 mt-2">
+                    <label class="radio-label flex items-center cursor-pointer">
+                        <input type="radio" name="analysis" id="fftRadio" value="fft" class="hidden">
+                        <span class="radio-custom w-5 h-5 border-2 border-gray-500 rounded-full inline-block mr-2"></span>
+                        <span class="radio-text text-gray-200">FFT</span>
+                    </label>
+                    <label class="radio-label flex items-center cursor-pointer">
+                        <input type="radio" name="analysis" id="hpsRadio" value="hps" class="hidden" checked>
+                        <span class="radio-custom w-5 h-5 border-2 border-gray-500 rounded-full inline-block mr-2"></span>
+                        <span class="radio-text text-gray-200">HPS</span>
+                    </label>
+                    <label class="radio-label flex items-center cursor-pointer">
+                        <input type="radio" name="analysis" id="autocorrelationRadio" value="autocorrelation" class="hidden">
+                        <span class="radio-custom w-5 h-5 border-2 border-gray-500 rounded-full inline-block mr-2"></span>
+                        <span class="radio-text text-gray-200">Autocorrelation</span>
+                    </label>
+                </div>
+            </div>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-x-8 gap-y-4">
+                <div class="grid grid-cols-4 items-center gap-2">
+                    <label id="sensitivityLabel" for="sensitivitySlider" class="text-right text-gray-400">Sensitivity</label>
+                    <input type="range" id="sensitivitySlider" min="0" max="255" class="col-span-2">
+                    <span id="sensitivityValue" class="text-left text-gray-400 w-12"></span>
+                </div>
+                <div class="grid grid-cols-4 items-center gap-2">
+                    <label id="contrastLabel" for="contrastSlider" class="text-right text-gray-400">Contrast</label>
+                    <input type="range" id="contrastSlider" min="1" max="100" class="col-span-2">
+                    <span id="contrastValue" class="text-left text-gray-400 w-12"></span>
+                </div>
+                <div id="bleedControl" class="grid grid-cols-4 items-center gap-2">
+                    <label for="bleedSlider" class="text-right text-gray-400">V-Bleed</label>
+                    <input type="range" id="bleedSlider" min="0" max="10" class="col-span-2">
+                    <span id="bleedValue" class="text-left text-gray-400 w-12"></span>
+                </div>
+                <div id="limiterControl" class="grid grid-cols-4 items-center gap-2">
+                    <label for="limiterSlider" class="text-right text-gray-400">Limiter</label>
+                    <input type="range" id="limiterSlider" min="0" max="255" class="col-span-2">
+                    <span id="limiterValue" class="text-left text-gray-400 w-12"></span>
+                </div>
+            </div>
+             <div class="grid grid-cols-1 lg:grid-cols-2 gap-x-8 gap-y-4 lg:w-1/2 mx-auto pt-2">
+                <div class="grid grid-cols-4 items-center gap-2">
+                    <label for="speedSlider" class="text-right text-gray-400">Speed</label>
+                    <input type="range" id="speedSlider" min="1" max="10" value="2" class="col-span-2">
+                    <span id="speedValue" class="text-left text-gray-400 w-12">2</span>
+                </div>
+            </div>
+        </div>
+
+        <div id="actionButtons" class="flex justify-center space-x-4">
+            <button id="startStopButton" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-8 rounded-lg text-lg transition-all duration-200 shadow-lg w-48">
+                Start Listening
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // --- Inlined pitchdetect.js library ---
+        var MIN_SAMPLES = 0;
+        var GOOD_ENOUGH_CORRELATION = 0.9;
+        function autoCorrelate( buf, sampleRate ) {
+            var SIZE = buf.length;
+            var MAX_SAMPLES = Math.floor(SIZE/2);
+            var best_offset = -1;
+            var best_correlation = 0;
+            var rms = 0;
+            var foundGoodCorrelation = false;
+            var correlations = new Array(MAX_SAMPLES);
+            for (var i=0;i<SIZE;i++) {
+                var val = buf[i];
+                rms += val*val;
+            }
+            rms = Math.sqrt(rms/SIZE);
+            if (rms<0.01) return -1;
+            var lastCorrelation=1;
+            for (var offset = MIN_SAMPLES; offset < MAX_SAMPLES; offset++) {
+                var correlation = 0;
+                for (var i=0; i<MAX_SAMPLES; i++) {
+                    correlation += Math.abs((buf[i])-(buf[i+offset]));
+                }
+                correlation = 1 - (correlation/MAX_SAMPLES);
+                correlations[offset] = correlation;
+                if ((correlation>GOOD_ENOUGH_CORRELATION) && (correlation > lastCorrelation)) {
+                    foundGoodCorrelation = true;
+                    if (correlation > best_correlation) {
+                        best_correlation = correlation;
+                        best_offset = offset;
+                    }
+                } else if (foundGoodCorrelation) {
+                    var shift = (correlations[best_offset+1] - correlations[best_offset-1])/correlations[best_offset];
+                    return sampleRate/(best_offset+(8*shift));
+                }
+                lastCorrelation = correlation;
+            }
+            if (best_correlation > 0.01) {
+                return sampleRate/best_offset;
+            }
+            return -1;
+        }
+        // --- End of inlined library ---
+
+        document.addEventListener('DOMContentLoaded', () => {
+            // DOM Elements
+            const startStopButton = document.getElementById('startStopButton');
+            const statusText = document.getElementById('statusText');
+            const canvas = document.getElementById('spectrogramCanvas');
+            const ctx = canvas.getContext('2d');
+            const canvas2 = document.getElementById('spectrogramCanvas2');
+            const ctx2 = canvas2.getContext('2d');
+            const sensitivitySlider = document.getElementById('sensitivitySlider');
+            const contrastSlider = document.getElementById('contrastSlider');
+            const bleedSlider = document.getElementById('bleedSlider');
+            const limiterSlider = document.getElementById('limiterSlider');
+            const speedSlider = document.getElementById('speedSlider');
+            const sensitivityValue = document.getElementById('sensitivityValue');
+            const contrastValue = document.getElementById('contrastValue');
+            const bleedValue = document.getElementById('bleedValue');
+            const limiterValue = document.getElementById('limiterValue');
+            const speedValue = document.getElementById('speedValue');
+            const sensitivityLabel = document.getElementById('sensitivityLabel');
+            const analysisRadios = document.querySelectorAll('input[name="analysis"]');
+
+            // --- Configuration ---
+            const LABEL_MARGIN = 50;
+            const PITCH_CLASSES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+            const MIN_FREQ = 20;
+            const SMOOTHING_FRAMES = 3;
+
+            // State for independent settings
+            let analysisSettings = {
+                fft: { sensitivity: 136, contrast: 31, bleed: 3, limiter: 186 },
+                hps: { sensitivity: 22, contrast: 8, bleed: 4, limiter: 78 },
+                autocorrelation: { sensitivity: 25 }
+            };
+            let currentMode = 'hps';
+            let scrollSpeed = 2;
+
+            // Audio processing variables
+            let audioContext;
+            let analyser;
+            let mediaStreamSource;
+            let animationFrameId;
+            let displayBuffer = [];
+            let smoothingBuffer = [];
+            
+            // State
+            let isListening = false;
+            
+            function setupCanvases() {
+                [canvas, canvas2].forEach(c => {
+                    const dpr = window.devicePixelRatio || 1;
+                    const rect = c.parentElement.getBoundingClientRect();
+                    c.width = rect.width * dpr;
+                    c.height = rect.height * dpr;
+                    c.getContext('2d').scale(dpr, dpr);
+                    c.style.width = `${rect.width}px`;
+                    c.style.height = `${rect.height}px`;
+                    drawInitialState(c);
+                });
+            }
+
+            function drawInitialState(targetCanvas) {
+                const targetCtx = targetCanvas.getContext('2d');
+                const parentRect = targetCanvas.parentElement.getBoundingClientRect();
+                targetCtx.clearRect(0, 0, parentRect.width, parentRect.height);
+                targetCtx.fillStyle = '#000';
+                targetCtx.fillRect(0, 0, parentRect.width, parentRect.height);
+                drawPitchLabels(targetCanvas);
+            }
+
+            function drawPitchLabels(targetCanvas) {
+                const targetCtx = targetCanvas.getContext('2d');
+                const parentRect = targetCanvas.parentElement.getBoundingClientRect();
+                const canvasWidth = parentRect.width;
+
+                targetCtx.beginPath();
+                targetCtx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+                targetCtx.lineWidth = 1;
+                for (let i = 0; i < PITCH_CLASSES.length; i++) {
+                    const y = (1 - (i + 0.5) / PITCH_CLASSES.length) * parentRect.height;
+                    targetCtx.moveTo(LABEL_MARGIN, y);
+                    targetCtx.lineTo(canvasWidth, y);
+                }
+                targetCtx.stroke();
+
+                targetCtx.font = '10px Inter';
+                targetCtx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+                targetCtx.textAlign = 'right';
+                targetCtx.textBaseline = 'middle';
+
+                for (let i = 0; i < PITCH_CLASSES.length; i++) {
+                    const y = (1 - (i + 0.5) / PITCH_CLASSES.length) * parentRect.height;
+                    targetCtx.fillText(PITCH_CLASSES[i], LABEL_MARGIN - 10, y);
+                }
+            }
+
+            function freqToPitchY(freq, canvasHeight) {
+                if (freq <= 0) return canvasHeight;
+                const midiNum = 69 + 12 * Math.log2(freq / 440);
+                const octavePosition = midiNum % 12;
+                const percent = octavePosition / 12;
+                return (1 - percent) * canvasHeight;
+            }
+
+            async function startListening() {
+                if (isListening) return;
+                
+                try {
+                    if (!audioContext) {
+                        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    }
+                    if (audioContext.state === 'suspended') {
+                        await audioContext.resume();
+                    }
+
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                    analyser = audioContext.createAnalyser();
+                    analyser.fftSize = 32768;
+                    analyser.smoothingTimeConstant = 0.8;
+
+                    mediaStreamSource = audioContext.createMediaStreamSource(stream);
+                    mediaStreamSource.connect(analyser);
+                    
+                    isListening = true;
+                    startStopButton.textContent = 'Stop Listening';
+                    startStopButton.classList.remove('bg-blue-600', 'hover:bg-blue-700');
+                    startStopButton.classList.add('bg-red-600', 'hover:bg-red-700');
+                    statusText.textContent = 'Listening...';
+                    
+                    const parentRect = canvas.parentElement.getBoundingClientRect();
+                    const spectrogramWidth = parentRect.width - LABEL_MARGIN;
+                    displayBuffer = new Array(spectrogramWidth).fill(null);
+                    smoothingBuffer = [];
+
+                    drawRealTime();
+
+                } catch (err) {
+                    console.error('Error accessing microphone:', err);
+                    statusText.textContent = 'Error: Could not access microphone.';
+                }
+            }
+
+            function stopListening() {
+                if (!isListening) return;
+                
+                if (mediaStreamSource) {
+                    mediaStreamSource.mediaStream.getTracks().forEach(track => track.stop());
+                }
+                if (animationFrameId) {
+                    cancelAnimationFrame(animationFrameId);
+                }
+                
+                isListening = false;
+                startStopButton.textContent = 'Start Listening';
+                startStopButton.classList.remove('bg-red-600', 'hover:bg-red-700');
+                startStopButton.classList.add('bg-blue-600', 'hover:bg-blue-700');
+                statusText.textContent = "Press 'Start Listening' to begin.";
+            }
+            
+            function drawRealTime() {
+                if (!isListening) return;
+                
+                for(let i = 0; i < scrollSpeed; i++) {
+                    const frequencyData = new Uint8Array(analyser.frequencyBinCount);
+                    const timeData = new Float32Array(analyser.fftSize);
+                    analyser.getByteFrequencyData(frequencyData);
+                    analyser.getFloatTimeDomainData(timeData);
+
+                    smoothingBuffer.push(frequencyData);
+                    if (smoothingBuffer.length > SMOOTHING_FRAMES) {
+                        smoothingBuffer.shift();
+                    }
+                    const smoothedFrequencyData = new Uint8Array(frequencyData.length);
+                    for (let j = 0; j < frequencyData.length; j++) {
+                        let sum = 0;
+                        for (let k = 0; k < smoothingBuffer.length; k++) {
+                            sum += smoothingBuffer[k][j];
+                        }
+                        smoothedFrequencyData[j] = sum / smoothingBuffer.length;
+                    }
+
+                    let newSlice;
+                    if (currentMode === 'autocorrelation') {
+                        const pitch = autoCorrelate(timeData, audioContext.sampleRate);
+                        newSlice = { type: 'pitch', pitch, timeData };
+                    } else {
+                        let dataSource = smoothedFrequencyData;
+                        if (currentMode === 'hps') {
+                            dataSource = analyzeHPSFrame(smoothedFrequencyData);
+                        }
+                        newSlice = { type: 'spectrum', data: dataSource };
+                    }
+
+                    displayBuffer.shift();
+                    displayBuffer.push(newSlice);
+                }
+
+                drawBuffer(canvas);
+                drawBitmapCanvas();
+
+                animationFrameId = requestAnimationFrame(drawRealTime);
+            }
+
+            function drawBitmapCanvas() {
+                const parentRect = canvas2.parentElement.getBoundingClientRect();
+                ctx2.clearRect(0, 0, parentRect.width, parentRect.height);
+                ctx2.drawImage(canvas, 0, 0);
+            }
+
+            function drawBuffer(targetCanvas) {
+                drawInitialState(targetCanvas);
+                const settings = analysisSettings[currentMode];
+                const sliceWidth = 1;
+
+                for (let x = 0; x < displayBuffer.length; x++) {
+                    const slice = displayBuffer[x];
+                    if (!slice) continue;
+
+                    const sliceX = LABEL_MARGIN + x;
+
+                    if (slice.type === 'spectrum') {
+                        drawSpectrogramSlice(sliceX, sliceWidth, slice.data, settings, targetCanvas);
+                    } else if (slice.type === 'pitch') {
+                        drawPitchSlice(sliceX, sliceWidth, slice.pitch, slice.timeData, settings, targetCanvas);
+                    }
+                }
+            }
+
+            function analyzeHPSFrame(fftFrame) {
+                const productFrame = new Float32Array(fftFrame.length);
+                let maxProduct = 0;
+                for (let i = 0; i < fftFrame.length; i++) {
+                    let product = parseFloat(fftFrame[i]);
+                    if (i * 2 < fftFrame.length) product *= fftFrame[i * 2];
+                    if (i * 3 < fftFrame.length) product *= fftFrame[i * 3];
+                    if (i * 4 < fftFrame.length) product *= fftFrame[i * 4];
+                    productFrame[i] = product;
+                    if (product > maxProduct) maxProduct = product;
+                }
+                const hpsFrame = new Uint8Array(fftFrame.length);
+                if (maxProduct > 0) {
+                    for (let i = 0; i < fftFrame.length; i++) {
+                        hpsFrame[i] = (productFrame[i] / maxProduct) * 255;
+                    }
+                }
+                return hpsFrame;
+            }
+
+            function drawSpectrogramSlice(x, sliceWidth, frequencyData, settings, targetCanvas) {
+                const targetCtx = targetCanvas.getContext('2d');
+                const { sensitivity, contrast, bleed, limiter } = settings;
+                const contrastValue = contrast / 10;
+                const parentRect = targetCanvas.parentElement.getBoundingClientRect();
+                
+                for (let i = 0; i < frequencyData.length; i++) {
+                    let amplitude = frequencyData[i];
+                    if (amplitude > sensitivity) {
+                        const freq = i * audioContext.sampleRate / analyser.fftSize;
+                        if (freq < MIN_FREQ) continue;
+                        
+                        const clippedAmplitude = Math.min(amplitude, limiter);
+                        const dynamicRange = limiter - sensitivity;
+                        if (dynamicRange <= 0) continue;
+
+                        const normalizedEnergy = (clippedAmplitude - sensitivity) / dynamicRange;
+                        const displayEnergy = Math.pow(normalizedEnergy, contrastValue);
+
+                        const y = freqToPitchY(freq, parentRect.height);
+                        
+                        const midiNum = 69 + 12 * Math.log2(freq / 440);
+                        const pitchClass = midiNum % 12;
+                        const hue = (120 + pitchClass * 25) % 360;
+
+                        const lightness = displayEnergy * 50;
+                        const color = `hsla(${hue}, 100%, ${lightness}%, 0.9)`;
+                        const transparentColor = `hsla(${hue}, 100%, ${lightness}%, 0)`;
+
+                        const gradient = targetCtx.createLinearGradient(x, y - bleed, x, y + bleed);
+                        gradient.addColorStop(0, transparentColor);
+                        gradient.addColorStop(0.5, color);
+                        gradient.addColorStop(1, transparentColor);
+                        
+                        targetCtx.fillStyle = gradient;
+                        targetCtx.fillRect(x, y - bleed, sliceWidth, bleed * 2);
+                    }
+                }
+            }
+            
+            function drawPitchSlice(x, sliceWidth, pitch, timeData, settings, targetCanvas) {
+                const targetCtx = targetCanvas.getContext('2d');
+                const { sensitivity } = settings;
+                const gateThreshold = sensitivity / 1000;
+                
+                let sumSquares = 0.0;
+                for (const amplitude of timeData) {
+                    sumSquares += amplitude * amplitude;
+                }
+                const rms = Math.sqrt(sumSquares / timeData.length);
+
+                if (pitch !== -1 && rms > gateThreshold) {
+                    const y = freqToPitchY(pitch, targetCanvas.parentElement.getBoundingClientRect().height);
+                    targetCtx.fillStyle = '#4299e1';
+                    targetCtx.fillRect(x, y - 1, sliceWidth, 3);
+                }
+            }
+
+            function updateSliderUI(mode) {
+                const settings = analysisSettings[mode];
+                
+                if (mode === 'autocorrelation') {
+                    sensitivitySlider.parentElement.style.display = '';
+                    contrastSlider.parentElement.style.display = 'none';
+                    bleedSlider.parentElement.style.display = 'none';
+                    limiterSlider.parentElement.style.display = 'none';
+                    sensitivitySlider.max = 100;
+                    sensitivitySlider.value = settings.sensitivity;
+                    sensitivityValue.textContent = (settings.sensitivity / 1000).toFixed(3);
+                } else {
+                    sensitivitySlider.parentElement.style.display = '';
+                    contrastSlider.parentElement.style.display = '';
+                    bleedSlider.parentElement.style.display = '';
+                    limiterSlider.parentElement.style.display = '';
+                    sensitivitySlider.max = 255;
+                    sensitivitySlider.value = settings.sensitivity;
+                    contrastSlider.value = settings.contrast;
+                    bleedSlider.value = settings.bleed;
+                    limiterSlider.value = settings.limiter;
+                    sensitivityValue.textContent = settings.sensitivity;
+                    contrastValue.textContent = (settings.contrast / 10).toFixed(1);
+                    bleedValue.textContent = settings.bleed;
+                    limiterValue.textContent = settings.limiter;
+                }
+            }
+            
+            function handleRadioChange(event) {
+                currentMode = event.target.value;
+                updateSliderUI(currentMode);
+            }
+
+            // --- Initialization ---
+            setupCanvases();
+            updateSliderUI(currentMode);
+            startStopButton.addEventListener('click', () => {
+                if (isListening) {
+                    stopListening();
+                } else {
+                    startListening();
+                }
+            });
+            
+            sensitivitySlider.addEventListener('input', (e) => {
+                analysisSettings[currentMode].sensitivity = parseInt(e.target.value);
+                updateSliderUI(currentMode);
+            });
+            contrastSlider.addEventListener('input', (e) => {
+                analysisSettings[currentMode].contrast = parseInt(e.target.value);
+                updateSliderUI(currentMode);
+            });
+            bleedSlider.addEventListener('input', (e) => {
+                analysisSettings[currentMode].bleed = parseInt(e.target.value);
+                updateSliderUI(currentMode);
+            });
+            limiterSlider.addEventListener('input', (e) => {
+                analysisSettings[currentMode].limiter = parseInt(e.target.value);
+                updateSliderUI(currentMode);
+            });
+            speedSlider.addEventListener('input', (e) => {
+                scrollSpeed = parseInt(e.target.value);
+                speedValue.textContent = scrollSpeed;
+            });
+            analysisRadios.forEach(radio => radio.addEventListener('change', handleRadioChange));
+            window.addEventListener('resize', () => {
+                setupCanvases();
+            });
+        });
+    </script>
+
+</body>
+</html>
